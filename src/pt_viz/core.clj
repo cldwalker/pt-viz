@@ -7,11 +7,13 @@
             [clojure.pprint :refer [pprint]]))
 
 (def api-token
-  "My pivotal tracker api token. TODO: Move to env var"
-  "X")
+  "My pivotal tracker api token."
+  (or (System/getenv "PT_API_TOKEN")
+      (throw (ex-info "$PT_API_TOKEN must be set" {}))))
 
 (def project-id
-  "X")
+  (or (System/getenv "PT_PROJECT_ID")
+      (throw (ex-info "$PT_PROJECT_ID must be set" {}))))
 
 (def pt-url
   "Base url for pivotal tracker"
