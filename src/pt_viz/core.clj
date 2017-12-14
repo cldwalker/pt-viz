@@ -102,7 +102,8 @@
   "Given a PT epic id, generate a story dependency graph to a file. Default file is graph.svg."
   ([epic-id] (-main epic-id "graph.svg"))
   ([epic-id file]
-   (let [graphviz-text (-> (get-epic-stories epic-id)
+   (let [epic-id_ (string/replace epic-id  #"^#*" "") ;; Allow click id and paste into terminal
+         graphviz-text (-> (get-epic-stories epic-id_)
                            stories->graphviz-data
                            graphviz-data->graphviz)]
      (sh/sh "dot" "-Tsvg" "-o" file :in graphviz-text)
