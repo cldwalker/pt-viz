@@ -1,7 +1,9 @@
 (ns pt-viz.core
   (:require [clj-http.client :as client]
-            [cheshire.core :refer :all]
+            [cheshire.core :as cheshire]
             [cemerick.url :refer [url url-encode]]
+            [clojure.string :as string]
+            [clojure.java.shell :as sh]
             [clojure.pprint :refer [pprint]]))
 
 (def api-token
@@ -10,10 +12,6 @@
 
 (def project-id
   "X")
-
-(def epic-id
-  "The epic I'm testing with"
-  "3460799")
 
 (def pt-url
   "Base url for pivotal tracker"
@@ -24,14 +22,13 @@
   (-> (client/get url
                   {:headers {"X-TrackerToken" api-token}})
       :body
-      (parse-string true)))
+      (cheshire/parse-string true)))
 
-(def preceded-by-syntax-regex
-  "The regex used to convey which stories precede a given story"
-  #"##[ ]*Preceded[ ]*By[\s]*\[[#0-9 ,]+\]")
-
-(def preceded-by-regex
-  #"\[[#0-9 ,]+\]")
+(defn fetch-blockers [story-id]
+  (->> (str pt-url "/projects/" project-id "/stories/" story-id "/blockers")
+      api-get
+      (keep #(some->> % :description (re-matches #"(?:#|https://www.pivotaltracker.com/story/show/)(\d+)") second Integer/parseInt))
+       vec))
 
 (defn get-epic-stories
   "Get the necessary information for each story in an epic needed to construct the story graph"
@@ -42,33 +39,30 @@
                             :name)
         stories-url (str pt-url "/projects/" project-id "/stories?with_label=" (url-encode epic-label-name))
         stories (api-get stories-url)
-        parse-preceded-by (fn [description]
-                            (if-let [statement (re-find preceded-by-syntax-regex description)]
-                              (if-let [raw (re-find preceded-by-regex statement)]
-                                (-> (clojure.string/replace raw #"#" "")
-                                    read-string)
-                                [])
-                              []))
-        process-story (fn [{:keys [description] :as story}]
-                        (let [preceded-by (parse-preceded-by description)]
-                          (-> story
-                              (select-keys [:id :url :name])
-                              (assoc :preceded-by preceded-by))))]
-    (mapv #(process-story %) stories)))
+        _ (println (format "Processing %s stories for epic '%s'..." (count stories) epic-label-name))
+        stories_ (mapv (fn [{:keys [id] :as story}]
+                                      (let [blockers (fetch-blockers id)]
+                                        (-> story
+                                            (select-keys [:id :url :name])
+                                            (assoc :blockers blockers))))
+                                    stories)]
+    (println "Found"
+             (count (mapcat :blockers stories_))
+             "dependencies among epic stories")
+    stories_))
 
 (defn stories->graphviz-data
   "Create a data representation of the node needed to make a graphviz dot"
   [stories]
   (reduce (fn [acc
-               {:keys [id url name preceded-by] :as story}]
+               {:keys [id url name blockers] :as story}]
             (let [create-edge (fn [from-id]
                                 {:from from-id
                                  :to id})
-                  new-edges (mapv create-edge preceded-by)]
+                  new-edges (mapv create-edge blockers)]
               (-> acc
                   (update :nodes conj story)
-                  (update :edges concat new-edges)
-                  )))
+                  (update :edges concat new-edges))))
           {:nodes []
            :edges []}
           stories))
@@ -83,13 +77,16 @@
         node-lines (mapv create-node nodes)
         edge-lines (mapv create-edge edges)
         lines (concat node-lines edge-lines)
-        body (clojure.string/join "\n" lines)]
+        body (string/join "\n" lines)]
     (format "digraph G {\n%s\n}" body)))
 
-(pprint (-> (get-epic-stories epic-id)
-            stories->graphviz-data))
-
-(spit "graph2.gv"
-      (-> (get-epic-stories epic-id)
-          stories->graphviz-data
-          graphviz-data->graphviz))
+(defn -main
+  "Given a PT epic id, generate a story dependency graph to a file. Default file is graph.svg."
+  ([epic-id] (-main epic-id "graph.svg"))
+  ([epic-id file]
+   (let [graphviz-text (-> (get-epic-stories epic-id)
+                           stories->graphviz-data
+                           graphviz-data->graphviz)]
+     (sh/sh "dot" "-Tsvg" "-o" file :in graphviz-text)
+     ;; Needed to exit due to sh/sh
+     (shutdown-agents))))
