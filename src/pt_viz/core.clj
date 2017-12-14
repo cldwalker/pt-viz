@@ -27,7 +27,10 @@
 (defn fetch-blockers [story-id]
   (->> (str pt-url "/projects/" project-id "/stories/" story-id "/blockers")
       api-get
-      (keep #(some->> % :description (re-matches #"(?:#|https://www.pivotaltracker.com/story/show/)(\d+)") second Integer/parseInt))
+      (keep #(if-let [story-id (->> % :description (re-matches #"(?:#|https://www.pivotaltracker.com/story/show/)(\d+)") second)]
+               (Integer/parseInt story-id)
+               ;; Support displaying raw-text blockers
+               (:description %)))
        vec))
 
 (defn get-epic-stories
@@ -67,15 +70,30 @@
            :edges []}
           stories))
 
+(let [counter (atom 0)]
+  (defn unique-id "Unique id for anonymous text nodes. Ok to start with 1 as PT stories are never this low" []
+    (swap! counter inc)))
+
 (defn graphviz-data->graphviz
   "Turn the data representation of the graph into the text format that the `dot` command line tool understands"
   [{:keys [nodes edges]}]
   (let [create-node (fn [{:keys [id url name]}]
-                           (format "\t%d [label=\"%s\",shape=box,fontcolor=blue,URL=\"%s\"];" id name url))
+                           (if url
+                             (format "\t%d [label=\"%s\",shape=box,fontcolor=blue,URL=\"%s\"];" id name url)
+                             (format "\t%d [label=\"%s\",shape=box];" id name)))
         create-edge (fn [{:keys [from to]}]
                       (format "\t%d -> %d;" from to))
-        node-lines (mapv create-node nodes)
-        edge-lines (mapv create-edge edges)
+        anon-nodes (atom [])
+        edges_ (mapv (fn [{:keys [from] :as edge}]
+                       (if (string? from)
+                         ;; Support text edges
+                         (let [id (unique-id)]
+                           (swap! anon-nodes conj {:id id :name from})
+                           (assoc edge :from id))
+                         edge))
+                     edges)
+        node-lines (mapv create-node (into nodes @anon-nodes))
+        edge-lines (mapv create-edge edges_)
         lines (concat node-lines edge-lines)
         body (string/join "\n" lines)]
     (format "digraph G {\n%s\n}" body)))
