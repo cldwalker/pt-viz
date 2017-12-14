@@ -78,9 +78,10 @@
   "Turn the data representation of the graph into the text format that the `dot` command line tool understands"
   [{:keys [nodes edges]}]
   (let [create-node (fn [{:keys [id url name]}]
-                           (if url
-                             (format "\t%d [label=\"%s\",shape=box,fontcolor=blue,URL=\"%s\"];" id name url)
-                             (format "\t%d [label=\"%s\",shape=box];" id name)))
+                      (let [name_ (clojure.string/replace name "\"" "\\\"")] ;; quoting needed for format
+                        (if url
+                          (format "\t%d [label=\"%s\",shape=box,fontcolor=blue,URL=\"%s\"];" id name_ url)
+                          (format "\t%d [label=\"%s\",shape=box];" id name_))))
         create-edge (fn [{:keys [from to]}]
                       (format "\t%d -> %d;" from to))
         anon-nodes (atom [])
@@ -105,7 +106,12 @@
    (let [epic-id_ (string/replace epic-id  #"^#*" "") ;; Allow click id and paste into terminal
          graphviz-text (-> (get-epic-stories epic-id_)
                            stories->graphviz-data
-                           graphviz-data->graphviz)]
-     (sh/sh "dot" "-Tsvg" "-o" file :in graphviz-text)
-     ;; Needed to exit due to sh/sh
-     (shutdown-agents))))
+                           graphviz-data->graphviz)
+         result (sh/sh "dot" "-Tsvg" "-o" file :in graphviz-text)]
+     (if (zero? (:exit result))
+       (do
+         (println "Success!")
+         (System/exit 0))
+       (do
+         (println "Failed to generate graph with error: " (:err result))
+         (System/exit 1))))))
